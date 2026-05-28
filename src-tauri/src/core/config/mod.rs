@@ -46,7 +46,7 @@ impl Default for AppConfig {
             dock_enabled: false,
             blur: true,
             theme: Theme::Dark,
-            launcher_hotkey: "Alt+Space".to_string(),
+            launcher_hotkey: "Alt+N".to_string(),
             taskbar_thickness: 56,
         }
     }

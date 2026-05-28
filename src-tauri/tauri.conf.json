@@ -12,11 +12,53 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "Nebula Desktop",
         "width": 1100,
         "height": 720,
         "resizable": true,
         "fullscreen": false
+      },
+      {
+        "label": "taskbar",
+        "title": "Nebula Taskbar",
+        "url": "index.html?view=taskbar",
+        "width": 1180,
+        "height": 80,
+        "resizable": false,
+        "fullscreen": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true
+      },
+      {
+        "label": "launcher",
+        "title": "Nebula Launcher",
+        "url": "index.html?view=launcher",
+        "width": 760,
+        "height": 520,
+        "resizable": false,
+        "fullscreen": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false
+      },
+      {
+        "label": "control-center",
+        "title": "Nebula Control Center",
+        "url": "index.html?view=control-center",
+        "width": 430,
+        "height": 640,
+        "resizable": false,
+        "fullscreen": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false
       }
     ],
     "security": {

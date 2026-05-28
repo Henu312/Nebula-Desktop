@@ -13,6 +13,12 @@
   background: #101214;
 }
 
+:root[data-view="taskbar"],
+:root[data-view="launcher"],
+:root[data-view="control-center"] {
+  background: transparent;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -27,4 +33,17 @@ body,
 body {
   min-width: 320px;
   overflow: hidden;
+}
+
+:root[data-view="taskbar"],
+:root[data-view="taskbar"] body,
+:root[data-view="taskbar"] #root,
+:root[data-view="launcher"],
+:root[data-view="launcher"] body,
+:root[data-view="launcher"] #root,
+:root[data-view="control-center"],
+:root[data-view="control-center"] body,
+:root[data-view="control-center"] #root {
+  min-width: 0;
+  background: transparent;
 }

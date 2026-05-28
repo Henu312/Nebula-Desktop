@@ -9,6 +9,23 @@ export type AppVersion = {
   version: string;
 };
 
+export type VolumeStatus = {
+  value: number;
+};
+
+export type WindowsSettingsPage =
+  | "wifi"
+  | "bluetooth"
+  | "display"
+  | "power"
+  | "home";
+
+export type AppSearchResult = {
+  id: string;
+  name: string;
+  path: string;
+};
+
 export type SystemStatus = {
   platform: string;
   arch: string;
@@ -26,6 +43,21 @@ export type AppConfig = {
   theme: Theme;
   launcherHotkey: string;
   taskbarThickness: number;
+};
+
+export type AppBarRect = {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+};
+
+export type AppBarStatus = {
+  registered: boolean;
+  hwnd?: string | null;
+  position?: TaskbarPosition | null;
+  thickness?: number | null;
+  rect?: AppBarRect | null;
 };
 
 export type StorageStatus = {
@@ -66,4 +98,13 @@ export type RunningApp = {
   processPath?: string | null;
   isForeground: boolean;
   isMinimized: boolean;
+};
+
+export type NotificationIndicatorStatus = "normal" | "active" | "attention";
+
+export type NotificationIndicator = {
+  windowId: string;
+  processId: number;
+  processPath?: string | null;
+  status: NotificationIndicatorStatus;
 };

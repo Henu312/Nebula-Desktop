@@ -1,7 +1,13 @@
 import { motion } from "framer-motion";
+import { TaskbarBadge } from "./TaskbarBadge";
 import type { TaskbarItemProps } from "./taskbar.types";
 
-export function TaskbarItem({ app, vertical, onActivate }: TaskbarItemProps) {
+export function TaskbarItem({
+  app,
+  vertical,
+  badgeStatus,
+  onActivate,
+}: TaskbarItemProps) {
   const label = app.title.trim().charAt(0).toUpperCase() || "A";
 
   return (
@@ -25,9 +31,7 @@ export function TaskbarItem({ app, vertical, onActivate }: TaskbarItemProps) {
           }
         />
       ) : null}
-      {app.isMinimized ? (
-        <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-nebula-warm" />
-      ) : null}
+      <TaskbarBadge status={badgeStatus} />
     </motion.button>
   );
 }

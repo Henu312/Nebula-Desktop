@@ -13,26 +13,38 @@ const positionClass = {
     "right-5 top-1/2 h-[min(820px,calc(100vh-48px))] w-16 -translate-y-1/2 flex-col",
 } as const;
 
+const overlayPositionClass = {
+  top: "inset-x-3 top-2 bottom-2 flex-row",
+  bottom: "inset-x-3 top-2 bottom-2 flex-row",
+  left: "inset-y-3 left-2 right-2 flex-col",
+  right: "inset-y-3 left-2 right-2 flex-col",
+} as const;
+
 export function Taskbar({
+  mode = "desktop",
   position,
   pinnedApps,
   runningApps,
+  notificationIndicators,
   ipcState,
   appVersion,
   onLaunchPinnedApp,
   onActivateRunningApp,
   onOpenLauncher,
+  onOpenControlCenter,
 }: TaskbarProps) {
   const vertical = position === "left" || position === "right";
   const visiblePinnedApps = pinnedApps.slice(0, vertical ? 5 : 6);
   const visibleApps = runningApps.slice(0, vertical ? 7 : 10);
+  const placementClass =
+    mode === "overlay" ? overlayPositionClass[position] : positionClass[position];
 
   return (
     <motion.nav
       initial={{ opacity: 0, y: vertical ? 0 : -8, x: vertical ? -8 : 0 }}
       animate={{ opacity: 1, y: 0, x: 0 }}
       transition={{ duration: 0.22 }}
-      className={`fixed z-30 flex items-center justify-between gap-3 rounded-2xl border border-white/12 bg-nebula-panel/82 p-2 shadow-2xl shadow-black/35 backdrop-blur-xl ${positionClass[position]}`}
+      className={`fixed z-30 flex items-center justify-between gap-3 rounded-2xl border border-white/12 bg-nebula-panel/82 p-2 shadow-2xl shadow-black/35 backdrop-blur-xl ${placementClass}`}
     >
       <button
         type="button"
@@ -57,6 +69,11 @@ export function Taskbar({
             vertical={vertical}
             isRunning={isPinnedAppRunning(app.path, runningApps)}
             isForeground={isPinnedAppForeground(app.path, runningApps)}
+            badgeStatus={pinnedBadgeStatus(
+              app.path,
+              runningApps,
+              notificationIndicators,
+            )}
             onLaunch={onLaunchPinnedApp}
           />
         ))}
@@ -74,6 +91,7 @@ export function Taskbar({
             key={app.windowId}
             app={app}
             vertical={vertical}
+            badgeStatus={runningBadgeStatus(app, notificationIndicators)}
             onActivate={onActivateRunningApp}
           />
         ))}
@@ -84,6 +102,7 @@ export function Taskbar({
         ipcState={ipcState}
         appCount={runningApps.length}
         appVersion={appVersion}
+        onOpenControlCenter={onOpenControlCenter}
       />
     </motion.nav>
   );
@@ -112,6 +131,43 @@ function isPinnedAppForeground(
   return runningApps.some(
     (app) => app.isForeground && executableName(app.processPath) === pinnedExecutable,
   );
+}
+
+function pinnedBadgeStatus(
+  path: string,
+  runningApps: TaskbarProps["runningApps"],
+  notificationIndicators: TaskbarProps["notificationIndicators"],
+) {
+  const pinnedExecutable = executableName(path);
+
+  if (!pinnedExecutable) {
+    return undefined;
+  }
+
+  const runningApp = runningApps.find(
+    (app) => executableName(app.processPath) === pinnedExecutable,
+  );
+
+  return runningApp ? runningBadgeStatus(runningApp, notificationIndicators) : undefined;
+}
+
+function runningBadgeStatus(
+  app: TaskbarProps["runningApps"][number],
+  notificationIndicators: TaskbarProps["notificationIndicators"],
+) {
+  const indicator = notificationIndicators.find(
+    (item) => item.windowId === app.windowId || item.processId === app.processId,
+  );
+
+  if (indicator) {
+    return indicator.status;
+  }
+
+  if (app.isMinimized) {
+    return "attention";
+  }
+
+  return app.isForeground ? "active" : "normal";
 }
 
 function executableName(path?: string | null) {

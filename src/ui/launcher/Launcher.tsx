@@ -1,5 +1,7 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { searchApps } from "../../ipc";
+import type { AppSearchResult } from "../../ipc";
 import { LauncherInput } from "./LauncherInput";
 import { LauncherResultList } from "./LauncherResultList";
 import type { LauncherProps, LauncherResult } from "./launcher.types";
@@ -10,17 +12,21 @@ export function Launcher({
   open,
   pinnedApps,
   runningApps,
+  recentItems,
   onClose,
   onLaunchPinnedApp,
+  onLaunchSearchApp,
+  onOpenRecentItem,
   onActivateRunningApp,
 }: LauncherProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [appResults, setAppResults] = useState<AppSearchResult[]>([]);
 
   const results = useMemo(
-    () => buildResults(query, pinnedApps, runningApps),
-    [query, pinnedApps, runningApps],
+    () => buildResults(query, pinnedApps, runningApps, recentItems, appResults),
+    [query, pinnedApps, runningApps, recentItems, appResults],
   );
 
   useEffect(() => {
@@ -30,12 +36,39 @@ export function Launcher({
 
     setQuery("");
     setSelectedIndex(0);
+    setAppResults([]);
     window.setTimeout(() => inputRef.current?.focus(), 40);
   }, [open]);
 
   useEffect(() => {
     setSelectedIndex(0);
   }, [query]);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      try {
+        const apps = await searchApps(query);
+
+        if (!cancelled) {
+          setAppResults(apps);
+        }
+      } catch {
+        if (!cancelled) {
+          setAppResults([]);
+        }
+      }
+    }, 160);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [open, query]);
 
   function execute(result: LauncherResult | undefined) {
     if (!result) {
@@ -44,6 +77,10 @@ export function Launcher({
 
     if (result.kind === "pinned") {
       onLaunchPinnedApp(result.app);
+    } else if (result.kind === "app") {
+      onLaunchSearchApp(result.app);
+    } else if (result.kind === "recent") {
+      onOpenRecentItem(result.item);
     } else {
       onActivateRunningApp(result.app);
     }
@@ -126,6 +163,8 @@ function buildResults(
   query: string,
   pinnedApps: LauncherProps["pinnedApps"],
   runningApps: LauncherProps["runningApps"],
+  recentItems: LauncherProps["recentItems"],
+  appResults: AppSearchResult[],
 ) {
   const normalizedQuery = query.trim().toLowerCase();
 
@@ -145,7 +184,23 @@ function buildResults(
     app,
   }));
 
-  return [...pinnedResults, ...runningResults]
+  const recentResults: LauncherResult[] = recentItems.map((item) => ({
+    id: `recent:${item.id}`,
+    kind: "recent",
+    title: item.title,
+    subtitle: item.path,
+    item,
+  }));
+
+  const appSearchResults: LauncherResult[] = appResults.map((app) => ({
+    id: `app:${app.id}`,
+    kind: "app",
+    title: app.name,
+    subtitle: app.path,
+    app,
+  }));
+
+  return [...pinnedResults, ...runningResults, ...recentResults, ...appSearchResults]
     .filter((result) => {
       if (!normalizedQuery) {
         return true;

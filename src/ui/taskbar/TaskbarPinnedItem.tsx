@@ -1,4 +1,5 @@
 import { motion } from "framer-motion";
+import { TaskbarBadge } from "./TaskbarBadge";
 import type { TaskbarPinnedItemProps } from "./taskbar.types";
 
 export function TaskbarPinnedItem({
@@ -6,6 +7,7 @@ export function TaskbarPinnedItem({
   vertical,
   isRunning,
   isForeground,
+  badgeStatus,
   onLaunch,
 }: TaskbarPinnedItemProps) {
   const label = app.name.trim().charAt(0).toUpperCase() || "P";
@@ -38,9 +40,7 @@ export function TaskbarPinnedItem({
           }
         />
       ) : null}
-      {isForeground ? (
-        <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-nebula-warm" />
-      ) : null}
+      <TaskbarBadge status={badgeStatus ?? (isForeground ? "active" : undefined)} />
     </motion.button>
   );
 }

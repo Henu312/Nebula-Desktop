@@ -5,6 +5,7 @@ type TaskbarStatusAreaProps = {
   ipcState: "loading" | "ready" | "browser";
   appCount: number;
   appVersion?: string;
+  onOpenControlCenter: () => void;
 };
 
 export function TaskbarStatusArea({
@@ -12,6 +13,7 @@ export function TaskbarStatusArea({
   ipcState,
   appCount,
   appVersion,
+  onOpenControlCenter,
 }: TaskbarStatusAreaProps) {
   const [time, setTime] = useState(() => formatTime());
 
@@ -21,18 +23,21 @@ export function TaskbarStatusArea({
   }, []);
 
   return (
-    <div
+    <button
+      type="button"
+      title="打开 Control Center"
+      onClick={onOpenControlCenter}
       className={
         vertical
-          ? "flex flex-col items-center gap-2"
-          : "flex items-center gap-2"
+          ? "flex flex-col items-center gap-2 rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-white/75"
+          : "flex items-center gap-2 rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-white/75"
       }
     >
       <StatusChip label={ipcState} vertical={vertical} />
       <StatusChip label={`${appCount}`} vertical={vertical} />
       <StatusChip label={appVersion ?? time} vertical={vertical} />
       <StatusChip label={time} vertical={vertical} />
-    </div>
+    </button>
   );
 }
 

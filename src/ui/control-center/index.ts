@@ -1,1 +1,1 @@
-export const controlCenterModuleId = "control-center";
+export { ControlCenter } from "./ControlCenter";

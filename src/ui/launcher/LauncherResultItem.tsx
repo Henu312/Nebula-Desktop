@@ -28,6 +28,8 @@ export function LauncherResultItem({
         className={`grid h-10 w-10 shrink-0 place-items-center rounded-xl text-sm font-bold ${
           result.kind === "pinned"
             ? "bg-nebula-accent/14 text-nebula-accent"
+            : result.kind === "recent"
+              ? "bg-nebula-warm/14 text-nebula-warm"
             : "bg-white/[0.07] text-slate-200"
         }`}
       >

@@ -142,6 +142,37 @@ pub fn remove_pinned_app(id: &str) -> Result<(), NebulaError> {
     Ok(())
 }
 
+pub fn list_recent_items(limit: i64) -> Result<Vec<RecentItem>, NebulaError> {
+    let connection = open_ready_connection()?;
+    let safe_limit = limit.clamp(1, 50);
+    let mut statement = connection
+        .prepare(
+            "SELECT id, kind, title, path, last_opened_at
+             FROM recent_items
+             ORDER BY last_opened_at DESC, title ASC
+             LIMIT ?1",
+        )
+        .map_err(storage_error(
+            "storage_prepare_failed",
+            "准备最近项目查询失败",
+        ))?;
+
+    let rows = statement
+        .query_map(params![safe_limit], |row| {
+            Ok(RecentItem {
+                id: row.get(0)?,
+                kind: row.get(1)?,
+                title: row.get(2)?,
+                path: row.get(3)?,
+                last_opened_at: row.get(4)?,
+            })
+        })
+        .map_err(storage_error("storage_query_failed", "查询最近项目失败"))?;
+
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(storage_error("storage_row_map_failed", "读取最近项目失败"))
+}
+
 pub fn upsert_recent_item(item: &RecentItem) -> Result<(), NebulaError> {
     let connection = open_ready_connection()?;
     connection
@@ -326,6 +357,19 @@ mod tests {
         remove_pinned_app("terminal").expect("pinned app should be removed");
         let apps = list_pinned_apps().expect("pinned apps should be listed after delete");
         assert!(apps.is_empty());
+
+        let recent = RecentItem {
+            id: "app:notepad".to_string(),
+            kind: "app".to_string(),
+            title: "Notepad".to_string(),
+            path: "notepad.exe".to_string(),
+            last_opened_at: 2,
+        };
+
+        upsert_recent_item(&recent).expect("recent item should be saved");
+        let recent_items = list_recent_items(10).expect("recent items should be listed");
+        assert_eq!(recent_items.len(), 1);
+        assert_eq!(recent_items[0].id, "app:notepad");
 
         let _ = fs::remove_dir_all(root);
     }

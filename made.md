@@ -2178,3 +2178,2174 @@ D:\data\Nebula_Desktop\src-tauri\target\debug\nebula-desktop.exe
 3. 暴露 `search_apps(query)`。
 4. 暴露 `launch_app(app_id)` 或复用当前 `launch_app(path)`。
 5. Launcher 接入真实应用搜索结果。
+
+## 24. T3.2 应用搜索
+
+### 24.1 后端能力
+
+修改：
+
+- `src-tauri/src/commands/app.rs`
+- `src-tauri/src/lib.rs`
+- `src-tauri/Cargo.toml`
+
+新增：
+
+```rust
+AppSearchResult
+search_apps(query)
+```
+
+行为：
+
+- 扫描开始菜单目录，不扫描全盘：
+  - `%APPDATA%\Microsoft\Windows\Start Menu\Programs`
+  - `%PROGRAMDATA%\Microsoft\Windows\Start Menu\Programs`
+- 支持入口类型：
+  - `.lnk`
+  - `.exe`
+  - `.appref-ms`
+- 按文件名生成应用名称。
+- 按名称包含匹配搜索。
+- 使用 `HashSet` 避免同一路径重复。
+- 最多返回 40 条后端结果。
+
+同时调整：
+
+- `launch_app(path)` 从 `std::process::Command` 改为 Windows `ShellExecuteW`。
+- 这样可以直接启动开始菜单 `.lnk` 快捷方式和 `.appref-ms` 入口。
+
+### 24.2 IPC 接入
+
+修改：
+
+- `src/ipc/types.ts`
+- `src/ipc/client.ts`
+
+新增：
+
+```ts
+AppSearchResult
+searchApps(query)
+```
+
+### 24.3 Launcher 接入
+
+修改：
+
+- `src/ui/launcher/launcher.types.ts`
+- `src/ui/launcher/Launcher.tsx`
+- `src/app/App.tsx`
+
+新增结果类型：
+
+```ts
+{ kind: "app"; app: AppSearchResult }
+```
+
+行为：
+
+- Launcher 打开时清空应用搜索结果。
+- 输入变化后 160ms 防抖调用 `searchApps(query)`。
+- 结果列表合并显示：
+  - 固定应用
+  - 运行应用
+  - 开始菜单应用搜索结果
+- 选择应用搜索结果后调用 `launchApp(app.path)` 启动。
+- 执行后关闭 Launcher。
+
+### 24.4 验证结果
+
+执行：
+
+```powershell
+npm run check
+npm run build
+npm run rust:test
+npm run tauri:build:debug
+```
+
+结果：
+
+- `npm run check` 通过。
+- `npm run build` 通过。
+- `npm run rust:test` 通过，当前 1 个 Rust 单元测试通过。
+- `npm run tauri:build:debug` 通过。
+- 产物：
+
+```text
+D:\data\Nebula_Desktop\src-tauri\target\debug\nebula-desktop.exe
+```
+
+注意：
+
+- 普通权限首次运行 `npm run check` 时，Cargo 写入 `src-tauri\target` 出现 `拒绝访问 (os error 5)`。
+- 提升权限后验证通过，判断为构建目录权限问题，不是代码问题。
+
+### 24.5 当前下一步
+
+按照任务书，下一步应执行：
+
+- `T3.3 最近项目`
+
+建议实现内容：
+
+1. 为 Rust 存储层补充 `list_recent_items(limit)`。
+2. 暴露 Tauri 命令 `list_recent_items`。
+3. 前端 IPC 增加 `listRecentItems()`。
+4. Launcher 接入最近项目结果。
+5. 启动应用或打开最近项目后写入/更新时间。
+
+## 25. T3.3 最近项目
+
+### 25.1 后端存储读取
+
+修改：
+
+- `src-tauri/src/core/storage/mod.rs`
+- `src-tauri/src/commands/storage.rs`
+- `src-tauri/src/lib.rs`
+
+新增：
+
+```rust
+list_recent_items(limit)
+commands::storage::list_recent_items(limit)
+```
+
+行为：
+
+- 从 `recent_items` 表读取最近项目。
+- 按 `last_opened_at DESC, title ASC` 排序。
+- `limit` 限制在 `1..=50`，默认命令侧为 12。
+- 注册到 Tauri invoke handler，供前端调用。
+
+测试补充：
+
+- 在现有存储层单元测试中增加 `upsert_recent_item` 后再 `list_recent_items` 的断言。
+
+### 25.2 前端 IPC
+
+修改：
+
+- `src/ipc/client.ts`
+
+新增：
+
+```ts
+listRecentItems(limit = 12)
+```
+
+复用已有：
+
+```ts
+upsertRecentItem(item)
+```
+
+### 25.3 Launcher 显示最近项目
+
+修改：
+
+- `src/ui/launcher/launcher.types.ts`
+- `src/ui/launcher/Launcher.tsx`
+- `src/ui/launcher/LauncherResultItem.tsx`
+- `src/app/App.tsx`
+
+新增结果类型：
+
+```ts
+{ kind: "recent"; item: RecentItem }
+```
+
+行为：
+
+- App 启动时读取最近项目。
+- Launcher 结果列表合并显示：
+  - 固定应用
+  - 运行应用
+  - 最近项目
+  - 应用搜索结果
+- 最近项目使用暖色标识。
+- 点击最近项目后通过 `launchApp(item.path)` 打开。
+- 打开成功后更新 `lastOpenedAt` 并重新读取最近项目列表。
+
+### 25.4 最近项目写入
+
+修改：
+
+- `src/app/App.tsx`
+
+新增行为：
+
+- 启动固定应用后写入/更新最近项目。
+- 启动应用搜索结果后写入/更新最近项目。
+- 打开已有最近项目后更新时间。
+- 最近项目 ID 使用：
+
+```ts
+`${kind}:${path.trim().toLowerCase()}`
+```
+
+说明：
+
+- 最近项目更新失败不会阻断已启动应用本身。
+- 当前最近项目类型先统一记录为 `app`，后续文件、文件夹、项目空间接入后可继续扩展 `kind`。
+
+### 25.5 验证结果
+
+执行：
+
+```powershell
+npm run rust:fmt
+npm run typecheck
+npm run check
+npm run rust:test
+npm run build
+npm run rust:fmt:check
+npm run tauri:build:debug
+```
+
+结果：
+
+- TypeScript 类型检查通过。
+- Rust `cargo check` 通过。
+- Rust 单元测试通过，当前 1 个测试通过。
+- Vite 生产构建通过。
+- Rust 格式化检查通过。
+- Tauri debug 构建通过。
+- 产物：
+
+```text
+D:\data\Nebula_Desktop\src-tauri\target\debug\nebula-desktop.exe
+```
+
+### 25.6 当前下一步
+
+按照任务书，下一步进入：
+
+- `M4: Control Center 初版`
+- `T4.1 Control Center UI`
+
+建议实现内容：
+
+1. 新增 Control Center UI 组件。
+2. 在 Taskbar 右侧或状态区域接入打开入口。
+3. 展示基础系统状态、配置开关和占位控制项。
+4. 保持 Windows 10 / Windows 11 双平台兼容，不调用 Windows 11 专属控制中心 API。
+
+## 26. T4.1 Control Center UI
+
+### 26.1 UI 组件
+
+新增：
+
+- `src/ui/control-center/ControlCenter.tsx`
+
+修改：
+
+- `src/ui/control-center/index.ts`
+
+实现内容：
+
+- 新增 Control Center 浮层面板。
+- 使用 `AnimatePresence` 和 `motion` 实现展开/关闭动画。
+- 深色半透明面板风格与 Taskbar、Launcher 保持一致。
+- 根据 Taskbar 位置计算面板位置，避免与 Taskbar 重叠：
+  - top：`right-6 top-24`
+  - bottom：`bottom-24 right-6`
+  - left：`left-24 top-6`
+  - right：`right-24 top-6`
+
+### 26.2 控制分组
+
+已实现 UI 分组：
+
+- 音量 Slider。
+- WiFi Toggle。
+- 蓝牙 Toggle。
+- 亮度 Slider。
+- 夜间模式 Toggle。
+- 电源模式分段按钮：
+  - 性能
+  - 均衡
+  - 节能
+- 运行窗口和 IPC 状态展示。
+- `打开 Windows 设置` 按钮占位。
+
+说明：
+
+- `T4.1` 只实现 UI 和本地交互状态。
+- 不调用 Windows 11 专属控制中心 API。
+- 不接管系统设置、不 Hook、不注入系统进程。
+- 真实音量读取和设置放到 `T4.2 音量控制`。
+
+### 26.3 Taskbar 入口
+
+修改：
+
+- `src/ui/taskbar/taskbar.types.ts`
+- `src/ui/taskbar/Taskbar.tsx`
+- `src/ui/taskbar/TaskbarStatusArea.tsx`
+- `src/app/App.tsx`
+
+新增：
+
+```ts
+onOpenControlCenter()
+controlCenterOpen
+```
+
+行为：
+
+- 点击 Taskbar 状态区打开 Control Center。
+- 打开 Control Center 时关闭 Launcher。
+- 打开 Launcher 时关闭 Control Center。
+- 点击浮层外部或关闭按钮可关闭 Control Center。
+
+### 26.4 验证结果
+
+执行：
+
+```powershell
+npm run typecheck
+npm run rust:fmt:check
+npm run build
+npm run check
+npm run tauri:build:debug
+```
+
+结果：
+
+- TypeScript 类型检查通过。
+- Rust 格式化检查通过。
+- Rust `cargo check` 通过。
+- Vite 生产构建通过。
+- Tauri debug 构建通过。
+- 产物：
+
+```text
+D:\data\Nebula_Desktop\src-tauri\target\debug\nebula-desktop.exe
+```
+
+### 26.5 当前下一步
+
+按照任务书，下一步应执行：
+
+- `T4.2 音量控制`
+
+建议实现内容：
+
+1. 使用 Windows Core Audio API 读取系统主音量。
+2. 使用 Windows Core Audio API 设置系统主音量。
+3. 暴露 `get_volume()` 和 `set_volume(value)` Tauri 命令。
+4. 前端 Control Center 音量 Slider 与后端状态同步。
+5. 保持 Windows 10 22H2 和 Windows 11 25H2 可用。
+
+## 27. T4.2 音量控制
+
+### 27.1 Rust Core Audio 命令
+
+修改：
+
+- `src-tauri/Cargo.toml`
+- `src-tauri/src/commands/mod.rs`
+- `src-tauri/src/lib.rs`
+
+新增：
+
+- `src-tauri/src/commands/audio.rs`
+
+新增 Windows API feature：
+
+```toml
+Win32_Media_Audio
+Win32_Media_Audio_Endpoints
+Win32_System_Com
+```
+
+新增 Tauri Commands：
+
+```rust
+get_volume()
+set_volume(value)
+```
+
+实现方式：
+
+1. 使用 `CoInitializeEx(None, COINIT_APARTMENTTHREADED)` 初始化 COM。
+2. 使用 `CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)` 创建音频设备枚举器。
+3. 使用 `GetDefaultAudioEndpoint(eRender, eConsole)` 获取默认输出设备。
+4. 使用 `IMMDevice::Activate` 获取 `IAudioEndpointVolume`。
+5. 使用 `GetMasterVolumeLevelScalar()` 读取系统主音量。
+6. 使用 `SetMasterVolumeLevelScalar()` 设置系统主音量。
+7. 前后端以百分比 `0..100` 通信，后端内部转换为 Core Audio scalar `0.0..1.0`。
+
+### 27.2 前端 IPC
+
+修改：
+
+- `src/ipc/types.ts`
+- `src/ipc/client.ts`
+
+新增类型：
+
+```ts
+VolumeStatus
+```
+
+新增方法：
+
+```ts
+getVolume()
+setVolume(value)
+```
+
+### 27.3 Control Center 接入
+
+修改：
+
+- `src/ui/control-center/ControlCenter.tsx`
+
+行为：
+
+- Control Center 打开且 IPC ready 时读取当前系统音量。
+- 音量 Slider 显示真实系统音量。
+- 拖动 Slider 后 120ms 防抖调用 `setVolume(value)`。
+- 写入成功后使用后端返回值校正 UI。
+- 读取或写入失败时显示 `未同步`，不影响面板其他控制项。
+- 浏览器预览或 IPC 不可用时保持本地预览状态。
+
+### 27.4 验证结果
+
+执行：
+
+```powershell
+npm run rust:fmt
+npm run typecheck
+npm run rust:check
+npm run check
+npm run rust:test
+npm run build
+npm run rust:fmt:check
+npm run tauri:build:debug
+```
+
+结果：
+
+- TypeScript 类型检查通过。
+- Rust `cargo check` 通过。
+- Rust 单元测试通过，当前 1 个测试通过。
+- Vite 生产构建通过。
+- Rust 格式化检查通过。
+- Tauri debug 构建通过。
+- 产物：
+
+```text
+D:\data\Nebula_Desktop\src-tauri\target\debug\nebula-desktop.exe
+```
+
+说明：
+
+- 当前已完成编译与集成验证。
+- 真实系统音量读写需要在运行中的桌面应用中打开 Control Center 后拖动 Slider 进行人工验证。
+
+### 27.5 当前下一步
+
+按照任务书，下一步应执行：
+
+- `T4.3 系统设置入口`
+
+建议实现内容：
+
+1. 后端增加打开 Windows 设置 URI 的命令。
+2. Control Center 的 WiFi、蓝牙、电源、系统设置按钮接入 Windows 设置页面。
+3. 使用 `ms-settings:` URI，保持 Windows 10 / Windows 11 兼容。
+
+## 28. T4.3 系统设置入口
+
+### 28.1 后端命令
+
+修改：
+
+- `src-tauri/src/commands/app.rs`
+- `src-tauri/src/lib.rs`
+
+新增命令：
+
+```rust
+open_windows_settings(page)
+```
+
+实现方式：
+
+- 继续使用 `ShellExecuteW` 打开 URI。
+- 将原 `launch_app(path)` 的 ShellExecute 逻辑抽为 `shell_open(...)` 复用。
+- 使用白名单限制允许打开的系统设置页，避免前端传入任意 URI。
+
+支持页面：
+
+```text
+wifi      -> ms-settings:network-wifi
+bluetooth -> ms-settings:bluetooth
+display   -> ms-settings:display
+power     -> ms-settings:powersleep
+home      -> ms-settings:
+```
+
+说明：
+
+- 使用 Windows 原生 `ms-settings:` URI。
+- 不重写系统设置。
+- 不接管系统设置窗口。
+- Windows 10 / Windows 11 均使用同一路径。
+
+### 28.2 前端 IPC
+
+修改：
+
+- `src/ipc/types.ts`
+- `src/ipc/client.ts`
+
+新增类型：
+
+```ts
+WindowsSettingsPage
+```
+
+新增方法：
+
+```ts
+openWindowsSettings(page)
+```
+
+### 28.3 Control Center 接入
+
+修改：
+
+- `src/ui/control-center/ControlCenter.tsx`
+
+新增入口：
+
+- `显示设置`
+- `电源设置`
+- `WiFi 设置`
+- `蓝牙设置`
+- `打开 Windows 设置`
+
+行为：
+
+- IPC ready 时点击按钮调用 `openWindowsSettings(page)`。
+- 成功后按钮文案显示 `Windows 设置已打开`。
+- 失败时按钮文案显示 `无法打开 Windows 设置`。
+- 浏览器预览或 IPC 不可用时不会尝试调用系统设置。
+
+### 28.4 验证结果
+
+执行：
+
+```powershell
+npm run rust:fmt
+npm run typecheck
+npm run check
+npm run build
+npm run rust:test
+npm run tauri:build:debug
+npm run rust:fmt:check
+```
+
+结果：
+
+- TypeScript 类型检查通过。
+- Rust `cargo check` 通过。
+- Rust 单元测试通过，当前 1 个测试通过。
+- Vite 生产构建通过。
+- Tauri debug 构建通过。
+- Rust 格式化检查通过。
+- 产物：
+
+```text
+D:\data\Nebula_Desktop\src-tauri\target\debug\nebula-desktop.exe
+```
+
+说明：
+
+- 当前完成编译与集成验证。
+- 真实打开系统设置页需要在运行中的桌面应用里点击 Control Center 的入口做人工验证。
+
+### 28.5 当前下一步
+
+按照任务书，下一步进入：
+
+- `M5: Notification Badge 初版`
+- `T5.1 Badge UI`
+
+建议实现内容：
+
+1. 为 Taskbar 应用项增加 badge UI 能力。
+2. 先基于模拟/本地状态显示注意状态，不读取通知正文。
+3. 后续再接入允许的窗口注意状态或通知计数来源。
+
+## 29. T5.1 Badge UI
+
+### 29.1 Badge 视觉组件
+
+新增：
+
+- `src/ui/taskbar/TaskbarBadge.tsx`
+
+修改：
+
+- `src/ui/taskbar/taskbar.types.ts`
+- `src/ui/taskbar/Taskbar.tsx`
+- `src/ui/taskbar/TaskbarItem.tsx`
+- `src/ui/taskbar/TaskbarPinnedItem.tsx`
+
+新增类型：
+
+```ts
+NotificationBadgeStatus = "normal" | "active" | "attention"
+```
+
+Badge 样式：
+
+- `normal`：低调灰色小点。
+- `active`：Nebula accent 小点和轻微外圈。
+- `attention`：暖色小点和轻微 pulse 动效。
+
+实现细节：
+
+- Badge 使用 `pointer-events-none`，不影响 Taskbar 图标点击。
+- Badge 固定在图标右上角，适配固定应用和运行应用图标。
+- 保留原有前台窗口底部/侧边指示条。
+
+### 29.2 当前状态映射
+
+当前 `T5.1` 只做 UI，不做真实通知检测。
+
+临时映射：
+
+- 运行应用为前台窗口：`active`
+- 运行应用为最小化状态：`attention`
+- 其他运行应用：`normal`
+- 固定应用如果能匹配到运行进程，则复用对应运行应用状态
+- 未运行固定应用不显示 Badge
+
+说明：
+
+- 这一步不读取通知正文。
+- 不接管 Windows Notification Center。
+- 不读取聊天内容。
+- 不 Hook Explorer。
+- 真实注意状态检测留给 `T5.2 注意状态检测`。
+
+### 29.3 验证结果
+
+执行：
+
+```powershell
+npm run typecheck
+npm run rust:fmt:check
+npm run check
+npm run build
+npm run rust:test
+npm run tauri:build:debug
+```
+
+结果：
+
+- TypeScript 类型检查通过。
+- Rust 格式化检查通过。
+- Rust `cargo check` 通过。
+- Rust 单元测试通过，当前 1 个测试通过。
+- Vite 生产构建通过。
+- Tauri debug 构建通过。
+- 产物：
+
+```text
+D:\data\Nebula_Desktop\src-tauri\target\debug\nebula-desktop.exe
+```
+
+### 29.4 当前下一步
+
+按照任务书，下一步应执行：
+
+- `T5.2 注意状态检测`
+
+建议实现内容：
+
+1. 后端提供 `get_notification_indicators()` 命令。
+2. 明确只暴露应用/窗口级状态，不返回通知正文。
+3. 前端从命令读取状态并覆盖当前 UI 临时映射。
+4. 如果 Windows API 无法可靠读取 Flash 状态，需在记录中明确不可检测边界。
+
+## 30. T5.2 注意状态检测
+
+### 30.1 后端 Indicator 命令
+
+新增：
+
+- `src-tauri/src/commands/notification.rs`
+
+修改：
+
+- `src-tauri/src/commands/mod.rs`
+- `src-tauri/src/lib.rs`
+
+新增命令：
+
+```rust
+get_notification_indicators()
+```
+
+返回结构：
+
+```rust
+NotificationIndicator {
+  window_id,
+  process_id,
+  process_path,
+  status
+}
+```
+
+状态枚举：
+
+```rust
+Normal
+Active
+Attention
+```
+
+实现方式：
+
+- 复用现有 Window Manager 的 `enumerate_running_apps()`。
+- 不读取通知正文。
+- 不读取聊天内容。
+- 不访问 Windows Notification Center 内容。
+- 不 Hook Explorer。
+- 不注入任何进程。
+
+当前状态映射：
+
+- `is_minimized == true` -> `Attention`
+- `is_foreground == true` -> `Active`
+- 其他运行窗口 -> `Normal`
+
+重要边界：
+
+- Windows 没有稳定公开 API 直接查询任意窗口当前是否处于 Flash 状态。
+- 当前命令提供窗口级 indicator 基础设施和保守状态映射。
+- 真正的微信、QQ、企业微信、钉钉注意状态可检测性，需要在 `T5.3` 中逐项实测并记录不可检测场景。
+
+### 30.2 前端 IPC
+
+修改：
+
+- `src/ipc/types.ts`
+- `src/ipc/client.ts`
+
+新增类型：
+
+```ts
+NotificationIndicatorStatus
+NotificationIndicator
+```
+
+新增方法：
+
+```ts
+getNotificationIndicators()
+```
+
+### 30.3 Taskbar 接入
+
+修改：
+
+- `src/app/App.tsx`
+- `src/ui/taskbar/taskbar.types.ts`
+- `src/ui/taskbar/Taskbar.tsx`
+
+行为：
+
+- App 初始加载时读取 `getNotificationIndicators()`。
+- 窗口状态刷新时同步刷新 indicator。
+- Taskbar 优先使用后端 indicator 状态渲染 Badge。
+- 如果 indicator 不存在，则回退到 `T5.1` 的本地窗口状态映射。
+- 固定应用通过进程路径匹配运行窗口，再复用对应 indicator。
+
+### 30.4 验证结果
+
+执行：
+
+```powershell
+npm run rust:fmt
+npm run typecheck
+npm run check
+npm run build
+npm run rust:test
+npm run rust:fmt:check
+npm run tauri:build:debug
+```
+
+结果：
+
+- TypeScript 类型检查通过。
+- Rust `cargo check` 通过。
+- Vite 生产构建通过。
+- Rust 单元测试通过，当前 1 个测试通过。
+- Rust 格式化检查通过。
+- Tauri debug 构建通过。
+- 产物：
+
+```text
+D:\data\Nebula_Desktop\src-tauri\target\debug\nebula-desktop.exe
+```
+
+### 30.5 当前下一步
+
+按照任务书，下一步应执行：
+
+- `T5.3 微信/QQ兼容测试`
+
+建议执行内容：
+
+1. 运行 debug 产物。
+2. 打开微信、QQ、企业微信、钉钉。
+3. 分别触发新消息或注意状态。
+4. 记录 Badge 是否可检测。
+5. 明确不可检测场景，确保不引入 Hook、注入或通知正文读取。
+
+## 31. T5.3 微信/QQ兼容测试
+
+### 31.1 任务边界
+
+任务要求：
+
+- 测试微信新消息时 Badge 行为。
+- 测试 QQ 新消息时 Badge 行为。
+- 测试企业微信新消息时 Badge 行为。
+- 记录不可检测场景。
+
+约束：
+
+- 不 Hook Explorer。
+- 不注入微信、QQ、企业微信、钉钉等进程。
+- 不接管 Windows Notification Center。
+- 不读取通知正文。
+- 不读取聊天内容。
+- 不使用 undocumented API。
+
+### 31.2 当前环境进程检查
+
+执行：
+
+```powershell
+Get-Process | Where-Object { $_.ProcessName -match 'WeChat|WXWork|QQ|TIM|DingTalk|Ding' }
+Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'WeChat|WXWork|QQ|TIM|DingTalk|Ding' -or $_.CommandLine -match 'WeChat|WXWork|QQ|TIM|DingTalk|Ding' }
+```
+
+结果：
+
+- 普通权限执行 `Get-CimInstance Win32_Process` 时出现 `拒绝访问`。
+- 提升权限后成功读取进程信息。
+
+发现进程：
+
+- 微信：
+  - `Weixin.exe`
+  - `WeChatAppEx.exe`
+- QQ：
+  - `QQ.exe`
+  - `TXPlatform.exe`
+- 企业微信：
+  - `WXWork.exe`
+  - `WXWorkWeb.exe`
+  - `WeMail.exe`
+- 钉钉：
+  - 当前未发现运行进程。
+
+### 31.3 兼容性记录
+
+新增：
+
+- `兼容性记录.md`
+
+记录内容：
+
+- 当前测试边界。
+- 当前环境发现。
+- 微信、QQ、企业微信、钉钉检测矩阵。
+- 当前 Badge 行为记录。
+- 后续人工新消息测试步骤。
+
+当前结论：
+
+- 微信、QQ、企业微信已检测到运行进程，可做窗口级状态检测。
+- 钉钉当前未运行，无法验证。
+- 当前未触发真实新消息，因此不能声明已经验证真实消息 Badge 行为。
+- 当前方案只能确认：
+  - 主窗口存在。
+  - 进程路径存在。
+  - 前台状态。
+  - 最小化状态。
+- 当前方案不能确认：
+  - 托盘态未读消息。
+  - 系统通知中心中的通知正文。
+  - 所有应用是否一定通过窗口 Flash 暴露注意状态。
+
+### 31.4 验证说明
+
+本轮未修改代码，只新增兼容性记录文档。
+
+上一轮代码验证仍保持：
+
+```powershell
+npm run check
+npm run build
+npm run rust:test
+npm run tauri:build:debug
+```
+
+均已通过。
+
+本轮未重复执行构建，因为仅新增 Markdown 文档。
+
+### 31.5 当前下一步
+
+按照任务书，下一步进入：
+
+- `M6: 稳定性与性能验证`
+- `T6.1 性能验证`
+
+建议执行内容：
+
+1. 启动 debug 产物。
+2. 检查启动时间、CPU、内存。
+3. 检查窗口枚举刷新是否造成明显占用。
+4. 记录性能指标到文档。
+
+## 32. T6.1 性能验证
+
+### 32.1 任务要求
+
+任务：
+
+- 记录启动时间。
+- 记录空闲 CPU。
+- 记录内存占用。
+- 检查窗口枚举频率。
+
+验收标准：
+
+- 启动时间 `< 2s`。
+- 空闲 CPU `< 1%`。
+- 内存 `< 200MB`。
+
+### 32.2 Release 构建
+
+执行：
+
+```powershell
+cargo tauri build --no-bundle
+```
+
+结果：
+
+- 构建通过。
+- 产物：
+
+```text
+D:\data\Nebula_Desktop\src-tauri\target\release\nebula-desktop.exe
+```
+
+### 32.3 性能采样
+
+新增：
+
+- `性能验证记录.md`
+
+采样方式：
+
+1. 使用 `Start-Process` 启动 Nebula Desktop。
+2. 从启动计时到进程出现非 0 `MainWindowHandle`，记录为启动时间。
+3. 启动后等待 3 秒进入空闲状态。
+4. 采样 5 秒 CPU 时间差，按逻辑处理器数量折算 CPU 百分比。
+5. 记录 Working Set、Private Memory、线程数、句柄数。
+6. 测试后关闭本轮启动的 Nebula 进程。
+
+### 32.4 Debug 产物结果
+
+产物：
+
+```text
+D:\data\Nebula_Desktop\src-tauri\target\debug\nebula-desktop.exe
+```
+
+结果：
+
+- 启动时间：2461ms。
+- 空闲 CPU：0.017%。
+- Working Set：44.03MB。
+- Private Memory：10.36MB。
+- 线程数：12。
+- 句柄数：427。
+
+结论：
+
+- CPU 达标。
+- 内存达标。
+- Debug 启动时间超过 2 秒，不作为最终性能验收依据。
+
+### 32.5 Release 产物结果
+
+构建后首次冷启动：
+
+- 启动时间：2276ms。
+- 空闲 CPU：0.035%。
+- Working Set：39.47MB。
+- Private Memory：10.25MB。
+- 线程数：12。
+- 句柄数：421。
+
+Release 连续热启动：
+
+- 第 1 次：
+  - 启动时间：155ms。
+  - 空闲 CPU：0.020%。
+  - Working Set：39.05MB。
+  - Private Memory：10.20MB。
+- 第 2 次：
+  - 启动时间：79ms。
+  - 空闲 CPU：0.000%。
+  - Working Set：38.88MB。
+  - Private Memory：10.27MB。
+
+### 32.6 窗口枚举频率
+
+当前前端窗口状态刷新间隔：
+
+```ts
+WINDOW_REFRESH_INTERVAL_MS = 2_500
+```
+
+结论：
+
+- 2.5 秒刷新一次，不属于高频轮询。
+- 当前 CPU 采样未显示窗口枚举造成明显空闲占用。
+
+### 32.7 当前结论
+
+通过项：
+
+- 空闲 CPU `< 1%`。
+- 内存 `< 200MB`。
+- 窗口枚举频率合理。
+- Release 热启动 `< 2s`。
+
+未完全通过项：
+
+- 构建后首次 release 冷启动为 2276ms，略高于 `< 2s`。
+
+后续建议：
+
+1. 在非构建后环境中复测 release 冷启动。
+2. 将首屏渲染与 IPC 数据加载进一步解耦。
+3. 如果冷启动仍超过 2 秒，优先优化前端首屏初始化和 Tauri setup 阶段。
+
+### 32.8 当前下一步
+
+按照任务书，下一步应执行：
+
+- `T6.2 Windows 版本兼容验证`
+
+建议执行内容：
+
+1. 记录当前 Windows 11 Home 25H2 验证结果。
+2. 标记 Windows 10 22H2 需要在对应系统上复测。
+3. 检查启动、退出、Taskbar、Launcher、Control Center、Notification Badge。
+
+## 33. T6.2 Windows 版本兼容验证
+
+### 33.1 任务要求
+
+任务：
+
+- 在 Windows 10 22H2 上验证启动、退出、Taskbar、Launcher、Control Center。
+- 在 Windows 11 25H2 上验证启动、退出、Taskbar、Launcher、Control Center。
+- 对比两套系统的窗口透明、阴影、圆角、焦点行为。
+- 记录 Windows 10 降级样式是否正常。
+
+验收标准：
+
+- Windows 10 和 Windows 11 都能启动应用。
+- 核心功能在两个系统上均可用。
+- Windows 10 上视觉降级不影响操作。
+- Windows 11 上增强视觉不影响稳定性。
+
+### 33.2 当前系统确认
+
+执行：
+
+```powershell
+Get-ComputerInfo
+Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
+Get-CimInstance Win32_OperatingSystem
+```
+
+结果：
+
+- `Get-ComputerInfo` 返回 `Windows 10 Home China / 2009`。
+- 注册表 `ProductName` 返回 `Windows 10 Home China`。
+- 注册表 `DisplayVersion` 返回 `25H2`。
+- 注册表 `CurrentBuild` 返回 `26200`。
+- `Win32_OperatingSystem.Caption` 返回 `Microsoft Windows 11 家庭版 中文版`。
+- `Win32_OperatingSystem.Version` 返回 `10.0.26200`。
+- `OSArchitecture` 返回 `64 位`。
+
+结论：
+
+- 当前环境按项目记录为 Windows 11 Home 25H2 x64。
+- Windows 内部兼容字段仍可能显示 Windows 10，这是 Windows 11 常见兼容标识现象。
+
+### 33.3 Windows 11 启动/退出验证
+
+执行：
+
+```powershell
+Start-Process src-tauri\target\release\nebula-desktop.exe
+CloseMainWindow()
+```
+
+结果：
+
+```text
+WindowReady      : True
+CloseRequested   : True
+ExitedAfterClose : True
+ForcedStopNeeded : False
+```
+
+结论：
+
+- Release 产物在 Windows 11 Home 25H2 上可启动。
+- 主窗口可创建。
+- 可通过窗口关闭请求正常退出。
+- 不需要强制结束进程。
+
+### 33.4 兼容性记录
+
+新增：
+
+- `Windows兼容性验证记录.md`
+
+记录内容：
+
+- 当前系统识别。
+- Windows 11 25H2 启动/退出验证。
+- Taskbar、Launcher、Control Center、Notification Badge 当前状态。
+- Windows 10 22H2 待验证项目。
+- Windows 10 降级样式待验证项目。
+
+当前结论：
+
+- Windows 11 25H2：启动/退出通过。
+- Windows 11 25H2：构建链路通过。
+- Windows 10 22H2：当前机器无法实机验证，标记为待测。
+- Windows 11 完整 UI 交互复核仍需人工操作确认。
+
+### 33.5 当前下一步
+
+按照任务书，下一步应执行：
+
+- `T6.3 多屏 DPI 验证`
+
+建议执行内容：
+
+1. 读取当前显示器和缩放信息。
+2. 记录当前 DPI 环境。
+3. 标记 125%、150%、200% 缩放和多屏插拔为需要实机人工验证的项目。
+
+## 34. T6.3 多屏 DPI 验证
+
+### 34.1 任务要求
+
+任务：
+
+- 测试 125%、150%、200% 缩放。
+- 测试主屏和副屏。
+- 测试显示器插拔。
+- 测试 Taskbar Top / Bottom。
+
+验收标准：
+
+- UI 不错位。
+- AppBar 工作区计算正确。
+- 显示器变化后可恢复布局。
+
+### 34.2 当前环境读取
+
+执行：
+
+```powershell
+Get-CimInstance Win32_VideoController
+Get-ItemProperty 'HKCU:\Control Panel\Desktop\WindowMetrics'
+rg -n "AppBar|SHAppBar|DPI|dpi|monitor|显示器|WINDOW_REFRESH_INTERVAL" src src-tauri 系统设计文档.md 开发任务书.md
+```
+
+结果：
+
+- 显示控制器：`Intel(R) Arc(TM) Graphics`
+- 驱动版本：`32.0.101.6129`
+- 当前分辨率：`2560 x 1600`
+- 当前刷新率：`120Hz`
+- 当前 DPI：`AppliedDPI=144`
+- 当前缩放：`150%`
+
+### 34.3 代码状态检查
+
+已具备：
+
+- Taskbar 支持 `top`、`bottom`、`left`、`right` 的布局样式。
+- Taskbar 使用视口约束，避免固定写死屏幕宽度。
+- Launcher 使用视口居中浮层。
+- Control Center 根据 Taskbar 位置计算面板位置。
+
+未完成：
+
+- `src-tauri/src/core/appbar/mod.rs` 目前只有模块注释。
+- 尚未实现 `SHAppBarMessage`。
+- 尚未实现 AppBar 工作区预留。
+- 尚未实现显示器变化监听。
+- 尚未实现每显示器 DPI 查询和重算。
+
+### 34.4 验证记录
+
+新增：
+
+- `DPI验证记录.md`
+
+当前结论：
+
+- 当前 150% 缩放环境识别通过。
+- 当前主屏分辨率识别通过。
+- 前端响应式布局代码检查通过。
+- 125% 缩放实测未执行。
+- 200% 缩放实测未执行。
+- 副屏实测未执行。
+- 显示器插拔未执行。
+- AppBar 工作区计算未通过，因为 AppBar Manager 尚未实现。
+
+### 34.5 当前下一步
+
+按照任务书，下一步应执行：
+
+- `T6.4 退出恢复验证`
+
+建议执行内容：
+
+1. 测试正常退出。
+2. 测试异常退出。
+3. 验证 Explorer 未被影响。
+4. 验证 Windows 原生任务栏和通知中心仍可用。
+
+## 35. T6.4 退出恢复验证
+
+### 35.1 任务要求
+
+任务：
+
+- 测试正常退出。
+- 测试异常退出。
+- 测试 Explorer 未被影响。
+- 测试 Windows 原生任务栏和通知中心仍可用。
+
+验收标准：
+
+- 应用退出后系统桌面恢复正常。
+- 不造成黑屏。
+- 不造成 Explorer 崩溃。
+
+### 35.2 Explorer 初始状态
+
+执行：
+
+```powershell
+Get-Process explorer
+```
+
+结果：
+
+- Explorer 进程 ID：`11556`
+- Explorer 启动时间：`2026/5/28 8:36:51`
+
+### 35.3 正常退出和异常退出测试
+
+测试产物：
+
+```text
+D:\data\Nebula_Desktop\src-tauri\target\release\nebula-desktop.exe
+```
+
+执行流程：
+
+1. 启动 release 产物。
+2. 等待主窗口创建。
+3. 调用 `CloseMainWindow()` 测试正常退出。
+4. 再次启动 release 产物。
+5. 等待主窗口创建。
+6. 使用 `Stop-Process -Force` 测试异常退出。
+7. 检查 Explorer 进程是否仍在运行。
+
+结果：
+
+```text
+ExplorerBeforeId                 : 11556
+ExplorerAfterId                  : 11556
+ExplorerSameProcess              : True
+NormalWindowReady                : True
+NormalCloseRequested             : True
+NormalExitedAfterClose           : True
+NormalForcedStopNeeded           : False
+AbnormalWindowReady              : True
+AbnormalKilled                   : True
+ExplorerRunningAfterAbnormalExit : True
+```
+
+结论：
+
+- 正常退出通过。
+- 异常退出后 Nebula 进程可被结束。
+- Explorer 进程 ID 未变化。
+- 未观察到 Explorer 崩溃。
+- 未观察到黑屏。
+
+### 35.4 验证记录
+
+新增：
+
+- `退出恢复验证记录.md`
+
+当前未自动验证项：
+
+- Windows 原生任务栏点击是否完全正常。
+- Windows Notification Center 是否可正常打开。
+- 锁屏恢复后是否正常。
+- 睡眠唤醒后是否正常。
+- Explorer 手动重启后 Nebula 是否能恢复布局。
+
+### 35.5 当前状态
+
+当前已完成任务书的主要实现和记录：
+
+- Taskbar 初版。
+- Launcher 初版。
+- Control Center 初版。
+- Notification Badge 初版。
+- 性能验证记录。
+- Windows 版本兼容记录。
+- DPI 验证记录。
+- 退出恢复验证记录。
+
+仍需后续重点处理：
+
+1. AppBar Manager 尚未实现，`SHAppBarMessage` 工作区预留未完成。
+2. Windows 10 22H2 仍需实机验证。
+3. 125%、200% DPI 和多屏插拔仍需实机验证。
+4. 微信、QQ、企业微信、钉钉真实新消息 Badge 行为仍需人工触发验证。
+5. Release 构建后首次冷启动略高于 2 秒，需要复测和优化。
+
+## 36. AppBar Manager 后端能力补齐
+
+### 36.1 实现判断
+
+前一轮 `T6.3` 记录中，AppBar Manager 仍是空模块。
+
+本轮处理时确认：
+
+- 当前 Tauri 主窗口仍是普通应用窗口。
+- 还不是独立贴边、无边框、常驻的 Taskbar overlay 窗口。
+- 如果启动时直接把当前主窗口注册为 AppBar，会改写系统工作区并移动/压缩普通主窗口，影响当前开发体验。
+
+因此本轮采用策略：
+
+- 先补齐 AppBar Manager 后端能力。
+- 暂不默认启用 AppBar 注册。
+- 通过 IPC 暴露显式注册/注销命令。
+- 后续在真正 Taskbar overlay 窗口完成后，再默认启用。
+
+### 36.2 Rust 后端实现
+
+修改：
+
+- `src-tauri/Cargo.toml`
+- `src-tauri/src/core/appbar/mod.rs`
+- `src-tauri/src/commands/mod.rs`
+- `src-tauri/src/lib.rs`
+
+新增：
+
+- `src-tauri/src/commands/appbar.rs`
+
+新增 Windows API feature：
+
+```toml
+Win32_Graphics_Gdi
+```
+
+使用 API：
+
+```rust
+SHAppBarMessage
+APPBARDATA
+ABM_NEW
+ABM_QUERYPOS
+ABM_SETPOS
+ABM_REMOVE
+ABE_TOP
+ABE_BOTTOM
+ABE_LEFT
+ABE_RIGHT
+MonitorFromWindow
+GetMonitorInfoW
+SetWindowPos
+```
+
+新增后端能力：
+
+```rust
+register_appbar(hwnd, position, thickness)
+unregister_appbar()
+get_appbar_status()
+```
+
+行为：
+
+- 获取 Tauri 窗口 `HWND`。
+- 根据窗口所在显示器计算 AppBar 区域。
+- 支持 `top`、`bottom`、`left`、`right` 四个边。
+- `thickness` 限制在 `32..=128`。
+- 注册前若已有 AppBar 状态，先注销旧注册。
+- 注销时调用 `ABM_REMOVE`。
+- 内部保存当前注册状态、窗口句柄、位置、厚度和矩形。
+
+### 36.3 IPC 接入
+
+修改：
+
+- `src/ipc/types.ts`
+- `src/ipc/client.ts`
+
+新增类型：
+
+```ts
+AppBarRect
+AppBarStatus
+```
+
+新增前端方法：
+
+```ts
+getAppBarStatus()
+registerAppBar(position, thickness)
+unregisterAppBar()
+```
+
+说明：
+
+- 当前前端尚未自动调用 `registerAppBar()`。
+- 这是有意保守处理，避免普通主窗口直接注册 AppBar。
+
+### 36.4 记录修正
+
+修改：
+
+- `DPI验证记录.md`
+
+修正内容：
+
+- 从“AppBar Manager 尚未实现”改为“后端 AppBar 能力已实现，但未在 overlay 模式实机启用验证”。
+- 明确仍需真正 Taskbar overlay 窗口和工作区预留实测。
+
+### 36.5 验证结果
+
+执行：
+
+```powershell
+npm run rust:fmt
+npm run typecheck
+npm run rust:check
+npm run check
+npm run build
+npm run rust:test
+npm run rust:fmt:check
+npm run tauri:build:debug
+```
+
+结果：
+
+- Rust 格式化通过。
+- TypeScript 类型检查通过。
+- Rust `cargo check` 通过。
+- Vite 生产构建通过。
+- Rust 单元测试通过，当前 1 个测试通过。
+- Rust 格式化检查通过。
+- Tauri debug 构建通过。
+- 产物：
+
+```text
+D:\data\Nebula_Desktop\src-tauri\target\debug\nebula-desktop.exe
+```
+
+### 36.6 当前下一步
+
+下一步建议：
+
+1. 将当前普通主窗口拆分为独立 Taskbar overlay 窗口。
+2. overlay 窗口设为无边框、透明/半透明、贴边、固定厚度。
+3. 在 overlay 窗口 ready 后调用 `registerAppBar(position, thickness)`。
+4. 在窗口关闭或应用退出时调用 `unregisterAppBar()`。
+5. 再做工作区预留和多屏 DPI 实测。
+
+## 37. 当前注意项
+
+### 37.1 AppBar 注意项
+
+- 当前已实现 AppBar 后端能力，但没有默认启用。
+- 不要把当前普通主窗口直接注册为 AppBar。
+- 当前主窗口是开发/预览工作区窗口，不是真正的贴边 Taskbar overlay。
+- 如果直接对普通主窗口调用 `registerAppBar()`，可能会改写 Windows 工作区并移动或压缩主窗口。
+- 正确做法是先拆出独立 Taskbar overlay 窗口，再对该 overlay 窗口注册 AppBar。
+- overlay 窗口关闭、应用退出、异常恢复流程中必须调用 `unregisterAppBar()`。
+
+### 37.2 未完成实测项
+
+- Windows 10 22H2 尚未实机验证。
+- 125%、200% DPI 缩放尚未实机验证。
+- 多屏、副屏、显示器插拔尚未实机验证。
+- Windows 10 降级样式尚未截图或人工确认。
+- 微信、QQ、企业微信、钉钉真实新消息 Badge 行为尚未人工触发验证。
+- Windows 原生通知中心可用性尚未人工点击验证。
+
+### 37.3 性能注意项
+
+- Release 热启动已达标。
+- 空闲 CPU 和内存已达标。
+- 构建后首次 release 冷启动采样为 `2276ms`，略高于 `<2s` 目标。
+- 后续需要在非构建后环境中复测冷启动。
+- 如果冷启动仍超过 2 秒，应优先优化首屏渲染和启动阶段 IPC 加载。
+
+### 37.4 隐私与兼容边界
+
+- 不允许读取微信、QQ、企业微信、钉钉聊天内容。
+- 不允许读取通知正文。
+- 不接管 Windows Notification Center。
+- 不 Hook Explorer。
+- 不注入 Explorer 或其他应用进程。
+- Notification Badge 当前只使用窗口级状态和保守 indicator，不能声明支持真实未读消息数。
+
+### 37.5 下一步优先级
+
+建议优先顺序：
+
+1. 拆分独立 Taskbar overlay 窗口。
+2. 对 overlay 窗口接入 AppBar 注册和注销。
+3. 实测 AppBar 工作区预留。
+4. 做 Windows 10 22H2 实机验证。
+5. 做 DPI、多屏和显示器插拔验证。
+
+## 38. Taskbar overlay 退出修复
+
+### 38.1 问题
+
+短启动/关闭验证发现：
+
+```text
+WindowReady      : True
+CloseRequested   : True
+ExitedAfterClose : False
+ForcedStopNeeded : True
+```
+
+结论：
+
+- `main` 窗口可以创建，也能收到关闭请求。
+- `main` 关闭后进程没有自动退出。
+- 风险点是 `taskbar` overlay 窗口仍在事件循环中，AppBar 注册状态也需要在退出路径中明确注销。
+
+### 38.2 修复操作
+
+修改：
+
+- `src-tauri/src/lib.rs`
+
+修复内容：
+
+- `main` 窗口收到 `CloseRequested` 时调用 `api.prevent_close()`，避免只关闭主窗口后留下后台窗口。
+- 关闭前先调用 `crate::core::appbar::unregister_appbar()`，保证 AppBar 工作区预留被释放。
+- 如果存在 `taskbar` overlay 窗口，继续调用 `taskbar.close()`。
+- 最后调用 `window.app_handle().exit(0)` 请求 Tauri 应用整体退出。
+- `taskbar` 的 `CloseRequested` / `Destroyed` 仍继续调用 `unregister_appbar()`。
+- 补充 `main` 的 `Destroyed` 清理兜底，避免非标准退出路径残留 AppBar 状态。
+
+### 38.3 下一步验证
+
+首次修复后重新执行短启动/关闭验证，结果仍未通过：
+
+```text
+ProcessId        : 27956
+WindowReady      : True
+CloseRequested   : True
+ExitedAfterClose : False
+ForcedStopNeeded : True
+```
+
+随后枚举 debug 进程顶层窗口，确认有两个可见窗口：
+
+```text
+Nebula Taskbar  Tauri Window
+Nebula Desktop  Tauri Window
+```
+
+判断：
+
+- `CloseMainWindow()` 可能命中置顶的 `Nebula Taskbar`。
+- 原逻辑中 `taskbar` 收到关闭请求只注销 AppBar，不退出应用。
+- 因此即使 taskbar 窗口关闭，`main` 或事件循环仍可能保留。
+
+继续修改：
+
+- `taskbar` 收到 `CloseRequested` 时也调用 `api.prevent_close()`。
+- 先调用 `unregister_appbar()`。
+- 再调用 `window.app_handle().exit(0)` 请求整个应用退出。
+- `taskbar` 的 `Destroyed` 保留为 AppBar 注销兜底。
+
+第二次复测仍未通过：
+
+```text
+ProcessId        : 25788
+WindowReady      : True
+CloseRequested   : True
+ExitedAfterClose : False
+ForcedStopNeeded : True
+```
+
+判断：
+
+- 在当前多窗口 overlay 路径中，仅调用 `AppHandle.exit(0)` 不能可靠终止事件循环。
+- 对桌面增强工具来说，关闭请求后残留后台进程和 AppBar 工作区状态是更高风险。
+
+继续修改：
+
+- 新增 `request_app_exit(app_handle)`。
+- 先调用 Tauri `app_handle.exit(0)`，保留正常退出路径。
+- 再启动 250ms 延迟兜底线程调用 `std::process::exit(0)`。
+- 兜底前已经执行 `unregister_appbar()`，避免退出时残留 AppBar 工作区预留。
+
+### 38.4 下一步验证
+
+需要重新执行：
+
+```powershell
+npm run rust:fmt
+npm run check
+npm run build
+npm run rust:test
+npm run tauri:build:debug
+```
+
+并复测 debug 产物短启动/关闭，目标结果：
+
+```text
+ExitedAfterClose : True
+ForcedStopNeeded : False
+```
+
+### 38.5 验证结果
+
+重新执行：
+
+```powershell
+npm run rust:fmt
+npm run check
+npm run build
+npm run rust:test
+npm run tauri:build:debug
+```
+
+结果：
+
+- Rust 格式化通过。
+- TypeScript 类型检查通过。
+- Rust `cargo check` 通过。
+- Vite 生产构建通过。
+- Rust 单元测试通过，当前 1 个测试通过。
+- Tauri debug 构建通过。
+
+稳定启动后关闭验证：
+
+```text
+ProcessId        : 30144
+WindowReady      : True
+CloseRequested   : True
+ExitedAfterClose : True
+ForcedStopNeeded : False
+```
+
+结论：
+
+- debug 产物启动后等待窗口稳定，再调用 `CloseMainWindow()` 可以正常退出。
+- 退出不需要强制结束进程。
+- 当前关闭路径会先注销 AppBar，再请求应用退出，并有 250ms 进程级兜底。
+
+注意：
+
+- 在窗口句柄刚出现后立即关闭的自动化场景中，仍曾出现未退出情况。
+- 判断与启动早期多窗口创建顺序有关，真实用户路径风险较低。
+- 后续如果要强化极早期关闭场景，建议把 `taskbar` 从静态配置窗口改为 `setup` 后显式创建，确保事件处理和退出策略完全就绪后再显示 overlay。
+
+### 38.6 当前下一步
+
+下一步建议：
+
+1. 拆分独立 `launcher` overlay window。
+2. 拆分独立 `control-center` overlay window。
+3. `taskbar` overlay 按钮不再 no-op，而是显示/隐藏对应浮层窗口。
+4. 避免把 Launcher / Control Center 直接渲染在 80px 高的 taskbar 窗口里。
+
+## 39. Launcher / Control Center 独立 overlay 窗口
+
+### 39.1 目标
+
+前一阶段 `TaskbarOverlayApp` 中：
+
+- `onOpenLauncher` 是 no-op。
+- `onOpenControlCenter` 是 no-op。
+
+原因：
+
+- `taskbar` overlay 窗口高度只有约 80px。
+- 如果直接在 `taskbar` 窗口内部渲染 Launcher 或 Control Center，会被窗口边界裁切。
+
+本轮目标：
+
+- 拆分 `launcher` overlay window。
+- 拆分 `control-center` overlay window。
+- taskbar 按钮点击后显示对应 overlay 窗口。
+
+### 39.2 新增前端窗口控制
+
+新增：
+
+- `src/app/overlayWindows.ts`
+
+能力：
+
+```ts
+showOverlayWindow(label)
+hideOverlayWindow(label)
+hideCurrentWindow()
+```
+
+支持标签：
+
+```ts
+"launcher"
+"control-center"
+```
+
+实现：
+
+- 使用 `@tauri-apps/api/webviewWindow` 获取指定窗口。
+- 调用 `show()` 和 `setFocus()` 显示并聚焦 overlay。
+- 调用 `hide()` 隐藏窗口。
+- 显示前读取当前窗口所在显示器 `currentMonitor()`。
+- 将目标 overlay 窗口移动到该显示器左上角，并设置为显示器物理尺寸。
+- Launcher / Control Center 因此可以作为整屏透明浮层使用，不再受固定小窗口尺寸限制。
+- 通过 `window.__TAURI_INTERNALS__` 做运行时判断，避免浏览器预览中误调用 Tauri API。
+
+### 39.3 Launcher overlay App
+
+新增：
+
+- `src/app/LauncherOverlayApp.tsx`
+
+实现内容：
+
+- 独立加载固定应用、最近项目、运行窗口。
+- 复用现有 `Launcher` 组件。
+- `open` 固定为 true，窗口显示/隐藏由 Tauri window 控制。
+- 关闭 Launcher 时调用 `hideCurrentWindow()`，隐藏 overlay 窗口而不是销毁。
+- 支持：
+  - 启动固定应用。
+  - 启动搜索到的开始菜单应用。
+  - 打开最近项目。
+  - 激活或恢复运行窗口。
+  - 成功启动后更新最近项目。
+
+### 39.4 Control Center overlay App
+
+新增：
+
+- `src/app/ControlCenterOverlayApp.tsx`
+
+实现内容：
+
+- 独立加载配置、系统状态、运行窗口。
+- 复用现有 `ControlCenter` 组件。
+- `open` 固定为 true，窗口显示/隐藏由 Tauri window 控制。
+- 关闭 Control Center 时调用 `hideCurrentWindow()`。
+- 继续支持音量读取/设置和 Windows 设置入口。
+
+### 39.5 前端入口切换
+
+修改：
+
+- `src/main.tsx`
+
+新增 view：
+
+```text
+index.html?view=launcher
+index.html?view=control-center
+```
+
+映射：
+
+- 默认：`App`
+- `taskbar`：`TaskbarOverlayApp`
+- `launcher`：`LauncherOverlayApp`
+- `control-center`：`ControlCenterOverlayApp`
+
+同时把 `view` 写入 `document.documentElement.dataset.view`，供 CSS 区分透明窗口样式。
+
+### 39.6 Taskbar overlay 接入
+
+修改：
+
+- `src/app/TaskbarOverlayApp.tsx`
+
+行为：
+
+- 点击 Launcher 按钮：
+  - 先隐藏 `control-center`。
+  - 再显示并聚焦 `launcher`。
+- 点击 Control Center 按钮：
+  - 先隐藏 `launcher`。
+  - 再显示并聚焦 `control-center`。
+
+### 39.7 Tauri 窗口配置
+
+修改：
+
+- `src-tauri/tauri.conf.json`
+- `src-tauri/capabilities/default.json`
+
+新增窗口：
+
+```text
+launcher
+control-center
+```
+
+共同配置：
+
+- `decorations: false`
+- `transparent: true`
+- `alwaysOnTop: true`
+- `skipTaskbar: true`
+- `resizable: false`
+- `visible: false`
+
+说明：
+
+- 启动时创建窗口但默认隐藏。
+- taskbar 点击后再显示。
+- 避免 Launcher / Control Center 抢首屏焦点。
+- 初始配置尺寸只是兜底，实际显示前会按当前显示器尺寸重设位置和大小。
+
+Capabilities 修正：
+
+- 原 `default.json` 只包含 `main`。
+- 已补充：
+
+```json
+"windows": [
+  "main",
+  "taskbar",
+  "launcher",
+  "control-center"
+]
+```
+
+原因：
+
+- `taskbar` 需要调用 IPC 和窗口显示 API。
+- `launcher` / `control-center` 需要调用 IPC、隐藏自身窗口。
+- 如果不加入 capabilities，Tauri v2 运行时可能拒绝这些窗口的前端调用。
+
+按钮点击实测后继续修正：
+
+- taskbar 左侧 Launcher 按钮点击后，`Nebula Launcher` 仍为 `Visible=False`。
+- taskbar 右侧 Control Center 按钮点击后，`Nebula Control Center` 仍为 `Visible=False`。
+- 确认 `core:window:default` 只包含读取类窗口权限，不包含 `show`、`hide`、`set_focus`、`set_position`、`set_size`。
+
+补充显式权限：
+
+```json
+"core:window:allow-hide",
+"core:window:allow-set-focus",
+"core:window:allow-set-position",
+"core:window:allow-set-size",
+"core:window:allow-show"
+```
+
+### 39.8 关闭事件处理
+
+修改：
+
+- `src-tauri/src/lib.rs`
+
+新增：
+
+```rust
+is_aux_overlay(label)
+```
+
+行为：
+
+- `launcher` / `control-center` 收到 `CloseRequested` 时阻止默认关闭。
+- 调用 `window.hide()` 隐藏窗口。
+- 不退出主应用。
+
+### 39.9 样式修正
+
+修改：
+
+- `src/styles/index.css`
+
+新增透明窗口支持：
+
+```css
+:root[data-view="launcher"]
+:root[data-view="control-center"]
+```
+
+确保 overlay 窗口根节点和 body 背景透明。
+
+### 39.10 验证结果
+
+执行：
+
+```powershell
+npm run typecheck
+npm run rust:fmt
+npm run check
+npm run build
+npm run rust:test
+npm run tauri:build:debug
+```
+
+结果：
+
+- TypeScript 类型检查通过。
+- Rust 格式化通过。
+- Rust `cargo check` 通过。
+- Vite 生产构建通过，当前构建模块数为 460。
+- Rust 单元测试通过，当前 1 个测试通过。
+- Tauri debug 构建通过。
+- 产物：
+
+```text
+D:\data\Nebula_Desktop\src-tauri\target\debug\nebula-desktop.exe
+```
+
+Capabilities 和整屏 overlay 调整后再次执行：
+
+```powershell
+npm run check
+npm run build
+npm run tauri:build:debug
+```
+
+结果：
+
+- `npm run check` 通过。
+- `npm run build` 通过。
+- `npm run tauri:build:debug` 通过。
+
+补充 window 权限后再次执行：
+
+```powershell
+npm run check
+npm run tauri:build:debug
+```
+
+结果：
+
+- `npm run check` 通过。
+- `npm run tauri:build:debug` 通过。
+
+运行时窗口枚举结果：
+
+```text
+Nebula Desktop          Visible=True
+Nebula Taskbar          Visible=True
+Nebula Launcher         Visible=False
+Nebula Control Center   Visible=False
+```
+
+稳定关闭验证：
+
+```text
+CloseRequested   : True
+ExitedAfterClose : True
+```
+
+taskbar 按钮点击验证：
+
+```text
+LauncherVisibleBefore            : False
+ControlVisibleBefore             : False
+LauncherVisibleAfterClick        : True
+LauncherHiddenAfterBackdropClick : True
+ControlVisibleAfterClick         : True
+```
+
+Control Center 完整路径验证：
+
+```text
+ControlVisibleAfterTaskbarClick : True
+ControlHiddenAfterBackdropClick : True
+CloseRequested                  : True
+ExitedAfterClose                : True
+```
+
+结论：
+
+- `launcher` 和 `control-center` overlay 窗口已按预期创建并默认隐藏。
+- 主窗口和 taskbar overlay 启动后可见。
+- 稳定启动后关闭应用可以正常退出。
+- taskbar 左侧 N 按钮可以打开 Launcher overlay。
+- taskbar 右侧状态区可以打开 Control Center overlay。
+- overlay 背景点击可以隐藏对应浮层。
+
+### 39.11 当前注意项
+
+- Launcher / Control Center 显示前会按当前显示器尺寸铺满，但尚未按 AppBar 工作区扣除自定义 taskbar 厚度。
+- Control Center 还应进一步贴近真实 taskbar 状态区点击位置。
+- 当 Launcher / Control Center 处于可见状态时，`CloseMainWindow()` 可能命中辅助浮层窗口；此时按当前设计只隐藏浮层，不退出应用。
+- 退出应用应通过关闭 `main` / `taskbar`，或先隐藏辅助浮层后再关闭。
+
+## 40. Launcher 全局热键
+
+### 40.1 背景
+
+当前主窗口内已有键盘监听，但只在主窗口获得焦点时有效。
+
+原设计记录中默认热键为：
+
+```text
+Alt+Space
+```
+
+实测 Windows 全局热键注册：
+
+```text
+AltSpaceRegistered : False
+AltSpaceLastError  : 1409
+AltNRegistered     : True
+AltNLastError      : 0
+```
+
+结论：
+
+- 当前 Windows 11 Home 25H2 环境中，`Alt+Space` 已被系统占用，不能作为可靠全局热键。
+- `Alt+N` 可注册，适合作为 MVP 全局 Launcher 热键。
+
+### 40.2 后端实现
+
+修改：
+
+- `src-tauri/Cargo.toml`
+- `src-tauri/src/lib.rs`
+
+新增 Windows API feature：
+
+```toml
+Win32_UI_Input_KeyboardAndMouse
+```
+
+使用 API：
+
+```rust
+RegisterHotKey
+GetMessageW
+WM_HOTKEY
+MOD_ALT
+VK_N
+```
+
+实现内容：
+
+- 在 Tauri `setup` 阶段启动 `nebula-global-hotkey` 后台线程。
+- 注册 `Alt+N` 全局热键。
+- 收到热键消息后：
+  - 隐藏 `control-center`。
+  - 显示并聚焦 `launcher`。
+- 注册失败时写入 warn 日志，不阻断应用启动。
+
+### 40.3 默认配置同步
+
+修改：
+
+- `src-tauri/src/core/config/mod.rs`
+- `src/app/desktopDefaults.ts`
+- `src/app/App.tsx`
+- `系统设计文档.md`
+- `Windows兼容性验证记录.md`
+
+调整：
+
+- 默认 `launcherHotkey` 从 `Alt+Space` 改为 `Alt+N`。
+- 主窗口预览模式下的快捷键监听也从 `Alt+Space` 改为 `Alt+N`。
+- 设计文档配置示例同步为 `Alt+N`。
+- Windows 兼容记录中的 Launcher 交互项同步为 `Alt+N`。
+
+### 40.4 验证结果
+
+执行：
+
+```powershell
+npm run rust:fmt
+npm run check
+npm run tauri:build:debug
+```
+
+结果：
+
+- Rust 格式化通过。
+- TypeScript 类型检查通过。
+- Rust `cargo check` 通过。
+- Tauri debug 构建通过。
+
+全局热键运行时验证：
+
+```text
+LauncherVisibleBefore            : False
+LauncherVisibleAfterAltN         : True
+LauncherHiddenAfterBackdropClick : True
+CloseRequested                   : True
+ExitedAfterClose                 : True
+```
+
+结论：
+
+- `Alt+N` 可以在当前系统中打开 Launcher overlay。
+- Launcher 打开后可通过背景点击隐藏。
+- 隐藏后应用可正常退出。
+
+### 40.5 当前注意项
+
+- 现阶段热键实现固定注册 `Alt+N`，尚未按配置文件动态解析任意组合键。
+- 已存在的用户配置文件如果仍写着 `Alt+Space`，不会影响当前后端实际注册 `Alt+N`，但后续需要做配置迁移或热键解析。
+- `Alt+Space` 不应作为 Windows 全局热键默认值，因为它在当前环境中注册失败。

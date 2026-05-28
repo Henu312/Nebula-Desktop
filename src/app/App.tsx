@@ -4,102 +4,39 @@ import {
   getAppVersion,
   getConfig,
   getForegroundWindow,
+  getNotificationIndicators,
   getRunningApps,
   getStorageStatus,
   getSystemStatus,
   launchApp,
   listPinnedApps,
+  listRecentItems,
   restoreWindow,
+  upsertRecentItem,
 } from "../ipc";
 import type {
   AppConfig,
+  AppSearchResult,
   AppVersion,
+  NotificationIndicator,
   PinnedApp,
+  RecentItem,
   RunningApp,
   StorageStatus,
   SystemStatus,
 } from "../ipc";
+import { ControlCenter } from "../ui/control-center";
 import { Launcher } from "../ui/launcher";
 import { Taskbar } from "../ui/taskbar";
+import {
+  fallbackApps,
+  fallbackConfig,
+  fallbackPinnedApps,
+  RECENT_ITEM_LIMIT,
+  WINDOW_REFRESH_INTERVAL_MS,
+} from "./desktopDefaults";
 
 type IpcState = "loading" | "ready" | "browser";
-
-const WINDOW_REFRESH_INTERVAL_MS = 2_500;
-
-const fallbackConfig: AppConfig = {
-  taskbarPosition: "top",
-  dockEnabled: false,
-  blur: true,
-  theme: "dark",
-  launcherHotkey: "Alt+Space",
-  taskbarThickness: 56,
-};
-
-const fallbackApps: RunningApp[] = [
-  {
-    windowId: "preview-editor",
-    title: "Visual Studio Code",
-    processId: 1001,
-    processPath: null,
-    isForeground: true,
-    isMinimized: false,
-  },
-  {
-    windowId: "preview-terminal",
-    title: "Windows Terminal",
-    processId: 1002,
-    processPath: null,
-    isForeground: false,
-    isMinimized: false,
-  },
-  {
-    windowId: "preview-browser",
-    title: "Microsoft Edge",
-    processId: 1003,
-    processPath: null,
-    isForeground: false,
-    isMinimized: true,
-  },
-];
-
-const fallbackPinnedApps: PinnedApp[] = [
-  {
-    id: "explorer",
-    name: "Explorer",
-    path: "explorer.exe",
-    iconPath: null,
-    sortOrder: 0,
-    createdAt: 0,
-    updatedAt: 0,
-  },
-  {
-    id: "terminal",
-    name: "Terminal",
-    path: "wt.exe",
-    iconPath: null,
-    sortOrder: 1,
-    createdAt: 0,
-    updatedAt: 0,
-  },
-  {
-    id: "browser",
-    name: "Browser",
-    path: "msedge.exe",
-    iconPath: null,
-    sortOrder: 2,
-    createdAt: 0,
-    updatedAt: 0,
-  },
-  {
-    id: "notepad",
-    name: "Notepad",
-    path: "notepad.exe",
-    iconPath: null,
-    sortOrder: 3,
-    createdAt: 0,
-    updatedAt: 0,
-  },
-];
 
 export function App() {
   const [appVersion, setAppVersion] = useState<AppVersion | null>(null);
@@ -107,28 +44,45 @@ export function App() {
   const [appConfig, setAppConfig] = useState<AppConfig>(fallbackConfig);
   const [storageStatus, setStorageStatus] = useState<StorageStatus | null>(null);
   const [pinnedApps, setPinnedApps] = useState<PinnedApp[]>(fallbackPinnedApps);
+  const [recentItems, setRecentItems] = useState<RecentItem[]>([]);
   const [runningApps, setRunningApps] = useState<RunningApp[]>(fallbackApps);
+  const [notificationIndicators, setNotificationIndicators] = useState<
+    NotificationIndicator[]
+  >([]);
   const [foregroundWindow, setForegroundWindow] = useState<RunningApp | null>(
     fallbackApps[0],
   );
   const [ipcState, setIpcState] = useState<IpcState>("loading");
   const [launchMessage, setLaunchMessage] = useState("Pinned apps ready");
   const [launcherOpen, setLauncherOpen] = useState(false);
+  const [controlCenterOpen, setControlCenterOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
 
     async function loadDesktopState() {
       try {
-        const [version, status, config, storage, pinned, apps, foreground] =
+        const [
+          version,
+          status,
+          config,
+          storage,
+          pinned,
+          recent,
+          apps,
+          foreground,
+          indicators,
+        ] =
           await Promise.all([
             getAppVersion(),
             getSystemStatus(),
             getConfig(),
             getStorageStatus(),
             listPinnedApps(),
+            listRecentItems(RECENT_ITEM_LIMIT),
             getRunningApps(),
             getForegroundWindow(),
+            getNotificationIndicators(),
           ]);
 
         if (!cancelled) {
@@ -137,8 +91,10 @@ export function App() {
           setAppConfig(config);
           setStorageStatus(storage);
           setPinnedApps(pinned.length > 0 ? pinned : fallbackPinnedApps);
+          setRecentItems(recent);
           setRunningApps(apps.length > 0 ? apps : fallbackApps);
           setForegroundWindow(foreground ?? apps[0] ?? fallbackApps[0]);
+          setNotificationIndicators(indicators);
           setIpcState("ready");
         }
       } catch {
@@ -164,14 +120,16 @@ export function App() {
 
     async function refreshWindowState() {
       try {
-        const [apps, foreground] = await Promise.all([
+        const [apps, foreground, indicators] = await Promise.all([
           getRunningApps(),
           getForegroundWindow(),
+          getNotificationIndicators(),
         ]);
 
         if (!cancelled) {
           setRunningApps(apps.length > 0 ? apps : fallbackApps);
           setForegroundWindow(foreground ?? apps[0] ?? fallbackApps[0]);
+          setNotificationIndicators(indicators);
         }
       } catch {
         if (!cancelled) {
@@ -193,8 +151,9 @@ export function App() {
 
   useEffect(() => {
     function handleGlobalKeyDown(event: KeyboardEvent) {
-      if (event.altKey && event.code === "Space") {
+      if (event.altKey && event.code === "KeyN") {
         event.preventDefault();
+        setControlCenterOpen(false);
         setLauncherOpen((open) => !open);
       }
     }
@@ -217,6 +176,13 @@ export function App() {
 
     try {
       await launchApp(app.path);
+      await recordRecentItem({
+        id: recentItemId("app", app.path),
+        kind: "app",
+        title: app.name,
+        path: app.path,
+        lastOpenedAt: Date.now(),
+      });
       setLaunchMessage(`${app.name} launched`);
       window.setTimeout(async () => {
         try {
@@ -232,6 +198,66 @@ export function App() {
       }, 800);
     } catch {
       setLaunchMessage(`${app.name} launch failed`);
+    }
+  }
+
+  async function handleLaunchSearchApp(app: AppSearchResult) {
+    if (ipcState !== "ready") {
+      setLaunchMessage(`${app.name} preview`);
+      return;
+    }
+
+    try {
+      await launchApp(app.path);
+      await recordRecentItem({
+        id: recentItemId("app", app.path),
+        kind: "app",
+        title: app.name,
+        path: app.path,
+        lastOpenedAt: Date.now(),
+      });
+      setLaunchMessage(`${app.name} launched`);
+      window.setTimeout(async () => {
+        try {
+          const [apps, foreground] = await Promise.all([
+            getRunningApps(),
+            getForegroundWindow(),
+          ]);
+          setRunningApps(apps.length > 0 ? apps : fallbackApps);
+          setForegroundWindow(foreground ?? apps[0] ?? fallbackApps[0]);
+        } catch {
+          setLaunchMessage(`${app.name} launched, refresh failed`);
+        }
+      }, 800);
+    } catch {
+      setLaunchMessage(`${app.name} launch failed`);
+    }
+  }
+
+  async function handleOpenRecentItem(item: RecentItem) {
+    if (ipcState !== "ready") {
+      setLaunchMessage(`${item.title} preview`);
+      return;
+    }
+
+    try {
+      await launchApp(item.path);
+      await recordRecentItem({
+        ...item,
+        lastOpenedAt: Date.now(),
+      });
+      setLaunchMessage(`${item.title} opened`);
+    } catch {
+      setLaunchMessage(`${item.title} open failed`);
+    }
+  }
+
+  async function recordRecentItem(item: RecentItem) {
+    try {
+      await upsertRecentItem(item);
+      setRecentItems(await listRecentItems(RECENT_ITEM_LIMIT));
+    } catch {
+      setLaunchMessage(`${item.title} opened, recent update failed`);
     }
   }
 
@@ -280,20 +306,39 @@ export function App() {
         position={appConfig.taskbarPosition}
         pinnedApps={pinnedApps}
         runningApps={runningApps}
+        notificationIndicators={notificationIndicators}
         activeWindowId={foregroundWindow?.windowId}
         ipcState={ipcState}
         appVersion={appVersion?.version}
         onLaunchPinnedApp={handleLaunchPinnedApp}
         onActivateRunningApp={handleActivateRunningApp}
-        onOpenLauncher={() => setLauncherOpen(true)}
+        onOpenLauncher={() => {
+          setControlCenterOpen(false);
+          setLauncherOpen(true);
+        }}
+        onOpenControlCenter={() => {
+          setLauncherOpen(false);
+          setControlCenterOpen(true);
+        }}
       />
       <Launcher
         open={launcherOpen}
         pinnedApps={pinnedApps}
         runningApps={runningApps}
+        recentItems={recentItems}
         onClose={() => setLauncherOpen(false)}
         onLaunchPinnedApp={handleLaunchPinnedApp}
+        onLaunchSearchApp={handleLaunchSearchApp}
+        onOpenRecentItem={handleOpenRecentItem}
         onActivateRunningApp={handleActivateRunningApp}
+      />
+      <ControlCenter
+        open={controlCenterOpen}
+        position={appConfig.taskbarPosition}
+        ipcState={ipcState}
+        appCount={runningApps.length}
+        systemStatus={systemStatus}
+        onClose={() => setControlCenterOpen(false)}
       />
 
       <section className={`relative z-10 min-h-screen ${workspacePadding}`}>
@@ -399,4 +444,8 @@ function workspacePaddingClass(position: AppConfig["taskbarPosition"]) {
     default:
       return "pt-24";
   }
+}
+
+function recentItemId(kind: string, path: string) {
+  return `${kind}:${path.trim().toLowerCase()}`;
 }
